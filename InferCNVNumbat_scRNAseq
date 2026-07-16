@@ -1,0 +1,274 @@
+
+Smart-seq scRNA-seq protocol is plate-based and not cellular barcode-based every fastq file pair is a cell.
+From what i can gather from the documentation you would require separate fastq files for each cell, combined with a manifest file that lists the barcode sample/cell type combinations.
+
+Download reference genomes
+
+We use STAR version: 2.7.10a   
+Homo_sapiens.GRCh38.dna.primary_assembly.fa (reference genome)
+wget https://ftp.ensembl.org/pub/release-109/fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz
+
+Homo_sapiens.GRCh38.109.gtf (annotation)
+wget https://ftp.ensembl.org/pub/release-109/gtf/homo_sapiens/Homo_sapiens.GRCh38.109.gtf.gz
+
+gunzip *.fastq.gz
+
+The GTF and the GRCm38 genome fasta file (https://github.com/pachterlab/BYVSTZP_2020/releases/tag/biorxiv_v1), provided by the BICCN consortium, were used to create a transcriptome fasta file, transcripts-to-genes map, and kallisto index using kb ref -i index.idx, -g t2g.txt -f1 transcriptome.fa genome.fa genes.gtf
+
+#################################################
+
+DOWNLOAD gencode.v43.transcripts.fa.gz
+
+FASTQ to separate bams per cell
+
+INDEX WITH KALLISTO (https://doi.org/10.1038/s41586-021-03969-3 Nature 2021)
+
+kallisto index were built using 
+wget https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_43/gencode.v43.transcripts.fa.gz
+
+time start > 12:03
+kallisto index -i indexHuman_kallisto.idx gencode.v43.transcripts.fa.gz
+[build] loading fasta file gencode.v43.transcripts.fa.gz
+[build] k-mer length: 31
+[build] warning: clipped off poly-A tail (longer than 10)
+        from 2020 target sequences
+[build] warning: replaced 4 non-ACGUT characters in the input sequence
+        with pseudorandom nucleotides
+[build] counting k-mers ..
+time finish > 
+
+SMART-seq cells were processed using kallisto with the ‘kallisto pseudo’ command
+Gene-count matrices were made by using the -genecounts flag and TCC matrices were made by omitting it.
+
+
+#############################################################################
+$file_R1.fastq =  [ L001 + L002 + L003 + L004 ] R1.fastq (cat command to merge)
+$file_R2.fastq =  [ L001 + L002 + L003 + L004 ] R2.fastq (cat command to merge)
+#############################################################################
+
+#kallisto quant \
+#-i $i.index \
+#-o testoutput \
+#A_R1_001.fastq.gz A_R2_001.fastq.gz
+
+#for i in $(ls *.fastq);do
+#kallisto quant $i --index indexHuman_kallisto.idx --output-dir $i  --single --fragment-#length 500  --sd 200  --threads 32 --pseudobam > {$i};
+#done
+
+#for i in $(ls *.fastq);do kallisto quant $i --index indexHuman_kallisto.idx --output-dir ./#s143kallisto$i  --single --fragment-length 500  --sd 200  --threads 16 --pseudobam > {$i}; #done
+
+
+mkdir R1
+mkdir R2
+mv *R1_001.fastq.gz R1
+mv *R2_001.fastq.gz R2
+cd R1
+ls | cat -n | while read n f; do mv "$f" "$n"_$f; done
+cd ../R2
+ls | cat -n | while read n f; do mv "$f" "$n"_$f; done
+cd ..
+for i in $(seq 1 800); do kallisto bus -i Mus_musculus.GRCm38.cdna.all.idx -o $i\_bus_output/ -x 10xv2 -t 4 R1/$i\_*.gz  R2/$i\_.gz ; done
+
+
+
+Kallisto will output a folder for each quant command. Kallisto will print:
+
+[quant] fragment length distribution is truncated gaussian with mean = 150, sd = 5
+[index] k-mer length: 31
+[index] number of targets: 188,753
+[index] number of k-mers: 109,544,288
+[index] number of equivalence classes: 760,757
+[quant] running in single-end mode
+[quant] will process file 1: /camp/home/ziffo/working/oliver/public/astrocyte-clarke-PNAS-2018/reads/SRR6279025.fastq
+[quant] finding pseudoalignments for the reads ... done
+[quant] processed 27,467,230 reads, 4,239,422 reads pseudoaligned
+[   em] quantifying the abundances ... done
+[   em] the Expectation-MaximizatioDX $REF"
+
+
+##############################################################################
+
+for file in ./*.bam
+do
+echo $file 
+samtools index $file
+done
+
+
+# I have run numbat, I don't know where your problem is, but I have found some things to keep in mind, that maybe you need to run the pileup. All files must be in the same folder, the bam files must be indexed, the names of each cell must contain the barcode, and the cell, I put the same name as each bam file, you need to generate a file containing the names of your bams (filenames.txt), and then you can put the same file (filenames.txt) in the --bams and in the --barcodes. Using the --smartseq parameter.
+# example "s143.CB_ATCGGTTG.bam"
+# s143 is the plate, ATCGGTTG is the barcode, and all the name is the bamfile name.
+
+## Run and pileup
+ # bam files names with the barcodes and plate, same names that "cells"
+
+Rscript pileup_and_phase.R --label tripolar --samples xxx --smartseq --bams filenames.txt --barcodes filenames.txt --gmap genetic_map_hg38_withX.txt.gz --snpvcf genome1K.phase3.SNP_AF5e2.chr1toX.hg38.vcf --paneldir 1000G_hg38 --outdir numbat --ncores 64
+
+
+## We need different variables to contrast
+
+df_allele <- read.csv("allele_counts.tsv", sep="\t",header=TRUE) # output Run and pileup
+cell_annot <- read.csv("cell_annot.csv") # cell + group (variable) 
+# we need at least 2 clusters to compare (Group1 vs Group2).
+
+
+#### COUNT MATRIX SHOULD BE INTEGER VALUES (I USED "BARCODES.TSV", WITH IS UMI CORRECTED)
+count_mat_alldata <- read.csv("df_count_mat.csv") # matrix gene x cell (names of cells same that in cell_annot (name of bamfiles))
+
+#(If we want a specific analysis, of specific conditions, we generate the file 'vector.txt' to generate a matrix with specific columns, we will create a data.frame with the subset columns that we need)
+
+count_mat <- count_mat_alldata[,c("s143.CB_ATCGGTTG.bam",
+"s143.CB_ATGTGCGT.bam",
+"s143.CB_CAGCGATT.bam",
+"s143.CB_CAGTGACA.bam",
+"s143.CB_CCATTTCC.bam",
+"s143.CB_CGAGAATG.bam",
+"s143.CB_CGCTATAG.bam",
+"s143.CB_CGTATCAG.bam",
+"s143.CB_CTATAGGC.bam",
+"s143.CB_CTGAAGGA.bam",
+"s143.CB_CTGACTGT.bam",
+"s143.CB_CTGGCTAA.bam",
+"s143.CB_CTTCGTAC.bam",
+"s143.CB_CTTGTGCA.bam",
+"s143.CB_GAAACTGC.bam",
+"s143.CB_GAGAACGA.bam",
+"s143.CB_GATTGCTC.bam",
+"s143.CB_GCCACAAA.bam",
+"s143.CB_GCGTATAG.bam",
+"s143.CB_GCTGTAAC.bam",
+"s143.CB_GGCGATTT.bam",
+"s143.CB_GGGTTATG.bam",
+"s143.CB_GGTTCTGA.bam",
+"s143.CB_GTATCGCT.bam",
+"s143.CB_TTGTTCCG.bam")]
+# our cell_annot file an filenames.txt, must have the same dimension that our matrix counts
+
+library(numbat)
+> count_mat <- count_mat[!is.na(count_mat$SYMBOL), ]
+> count_mat <- count_mat[!duplicated(count_mat$SYMBOL), ]
+
+rownames(count_mat) <- count_mat[,1]
+count_mat[,1] <- NULL
+mat = as.matrix(count_mat)
+mat2 = rowsum(mat, rownames(mat), na.rm=TRUE) 
+
+# Also be careful because you need to remove all NA in the array to run numbat in the next step.
+
+
+mat2 = as(mat2, "dgCMatrix")
+ref2 = aggregate_counts(mat2, cell_annot)
+
+head(ref2)
+ 
+library(rtracklayer)
+
+g <- readGFF("Homo_sapiens.GRCh38.109.gtf")
+
+bulk <- get_bulk(mat2, ref2, df_allele, gtf = g)
+  
+  
+out= run_numbat(mat2, ref2, df_allele, genome="hg38", gamma= 5, t=1e-5, ncores=16, plot=TRUE, out_dir='./test')
+
+# the heatmap of hierarchical clustering is in .png in the folder 'test', and the order of the clustering is in hc.rds file. 
+gamma= 5 parameter recommended for smart seq
+default clusters =3 (you can change the init_k =3, for another number if you want to generate higher number of clusters)
+Remember: the 1 of the hc order, corresponds to the bottom of the heatmap.
+
+
+#############################################################
+
+Numbat’s GitHub site (https://github.com/kharchenkolab/numbat), it also indicated that the algorithm can be used to Infer the clonal architecture and evolutionary history of cells. Does the program itself also implement this function (phylogenetic analysis) or not? If so, it might be interesting to test it.
+
+
+out2= run_numbat(mat2, ref2, df_allele, genome="hg38", gamma= 5, t=1e-5, ncores=16, ncores_nni=16, plot=TRUE, min_cells=30, min_LLR=20, max_entropy=0.1, n_cut=3,  out_dir='./test2')
+
+
+
+## Prepare allele dataframe
+
+/TPS1S2_BPS0$ ls
+cellSNP.base.vcf  cellSNP.samples.tsv  cellSNP.tag.AD.mtx  cellSNP.tag.DP.mtx  cellSNP.tag.OTH.mtx
+# Read the pileup output in R
+
+library(dplyr)
+library(data.table)
+library(stringr)
+library(glue)
+library(Matrix)
+
+vcf_pu = fread(glue('cellSNP.base.vcf'), skip='#CHROM')%>%
+ rename(CHROM= '#CHROM')%>%
+ mutate(snp_id=paste(CHROM,POS,REF,ALT, sep='_')) %>%
+ mutate(CHROM=str_remove(CHROM, 'chr'))%>%
+ mutate(CHROM=factor(CHROM,unique(CHROM)))%>%
+ filter(CHROM!='X')
+
+vcf_phased = vcf_pu%>%mutate(GT='1|0',cM=0) 
+
+#pileup count matrix
+
+AD= readMM(glue('cellSNP.tag.AD.mtx'))
+DP= readMM(glue('cellSNP.tag.DP.mtx'))
+barcodes=fread(glue('cellSNP.samples.tsv'), header=F)$V1
+
+
+#convert to dataframe
+
+AD= as.data.frame(Matrix::summary(AD))%>%
+mutate(
+cell=barcodes[j],
+snp_id= vcf_pu$snp_id[i]
+)%>%
+select(-i,-j)%>%
+rename(AD=x)%>%
+select(cell, snp_id,AD)
+
+DP= as.data.frame(Matrix::summary(DP))%>%
+mutate(
+cell=barcodes[j],
+snp_id= vcf_pu$snp_id[i]
+)%>%
+select(-i,-j)%>%
+rename(DP=x)%>%
+select(cell, snp_id,DP)
+
+df_allele = DP%>%left_join(AD,by=c("cell", "snp_id"))%>%
+mutate(AD=ifelse(is.na(AD),0,AD))
+
+
+## attach genotype info
+df_allele = df_allele%>%inner_join(
+vcf_phased%>%select(snp_id,CHROM,POS,REF,ALT,GT,cM),
+by='snp_id') 
+
+count_mat <- read.csv("bulkRNAseq_counts.csv") 
+count_mat <- count_mat[!is.na(count_mat$SYMBOL), ]
+count_mat <- count_mat[!duplicated(count_mat$SYMBOL), ]
+
+## remember in the matrix the genes need to be SYMBOL
+
+df_allele <- read.csv("Bulk_allele_counts.tsv", sep="\t",header=TRUE) # output Run and pileup
+cell_annot <- read.csv("bulk_cell_annot.csv") # cell + group (variable) 
+
+
+rownames(count_mat) <- count_mat[,1]
+count_mat[,1] <- NULL
+mat = as.matrix(count_mat)
+mat2 = rowsum(mat, rownames(mat), na.rm=TRUE) 
+
+# Also be careful because you need to remove all NA in the array to run numbat in the next step.
+
+
+mat2 = as(mat2, "dgCMatrix")
+ref2 = aggregate_counts(mat2, cell_annot)
+
+
+
+out2= run_numbat(mat2, ref2, df_allele, genome="hg38", gamma= 5, t=1e-5, ncores=16, ncores_nni=16, plot=TRUE, min_LLR=30, skip_nj=T,  out_dir='./test4')
+
+
+## bulk data
+out= run_numbat(mat2, ref2, df_allele, genome="hg38", min_cells = 0, gamma= 5, t=1e-5, ncores=16, plot=TRUE, out_dir='./test')
+
+out= run_numbat(mat2, ref_hca, df_allele, genome="hg38", min_cells = 0, gamma= 5, t=1e-5, ncores=16, plot=TRUE, out_dir='./test_hca')
